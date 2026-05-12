@@ -64,7 +64,7 @@
         <div class="overflow-x-auto">
           <UTable :columns="printColumns" :data="printRecords">
             <template #download-cell="{ row }">
-              <UButton size="xs" variant="ghost" :href="`/api/print-records/${row.original.id}/file`" target="_blank" icon="i-lucide-download">下载</UButton>
+              <UButton size="xs" variant="ghost" icon="i-lucide-download" @click="downloadFile(row.original.id)">下载</UButton>
             </template>
           </UTable>
         </div>
@@ -277,6 +277,10 @@ async function executeDelete() {
     showDeleteModal.value = false
     pendingDeleteUser.value = null
   }
+}
+
+function downloadFile(id) {
+  window.open(`/api/print-records/${id}/file`, '_blank')
 }
 
 async function loadPrintRecords() {
