@@ -13,10 +13,15 @@
 # Epson 官方下载中心（download-center.epson.com）挂在 Akamai CDN 后面，对请求做
 # UA/Header/TLS 指纹等多维度风控，HTTP 403 概率高且 UUID 会被 Epson 定期轮换，
 # 不适合作为稳定的 CI 构建源。所以这里只从我们自维护的 GitHub Releases 镜像下载
-# 源码 tarball，下载失败则脚本以非零退出码结束（fail-fast），避免发布镜像里
-# 缺少 ESCPR2 驱动却静默成功。
-# 升级版本：① 在本仓库的 Releases 里上传新版 tarball；② 修改下方
-# ESCPR2_VERSION 与 ESCPR2_MIRROR_URL。
+# 源码 tarball / 预编译 deb，下载失败则脚本以非零退出码结束（fail-fast），
+# 避免发布镜像里缺少 ESCPR2 驱动却静默成功。
+#
+# 安装策略：
+#   amd64 / armhf → 直接 dpkg 安装预编译 .deb（省 5~10 分钟编译时间）
+#   其他架构（arm64 等） → 回退到源码编译
+# 升级版本：① 在本仓库的 Releases 里上传新版 tarball + amd64/armhf deb；
+#          ② 修改下方 ESCPR2_VERSION / ESCPR2_MIRROR_URL /
+#             ESCPR2_DEB_AMD64_URL / ESCPR2_DEB_ARMHF_URL。
 
 set -eo pipefail
 
@@ -24,23 +29,53 @@ set -eo pipefail
 # 配置
 # ────────────────────────────────────────────────────────────────────
 ESCPR2_VERSION="1.2.39"
-# 镜像 release tag 统一为 cups-driver，多个第三方驱动 tarball 共用一个 release，
-# 升级版本时上传新 tarball 到同一 release，无需创建新 tag。
+# 镜像 release tag 统一为 cups-driver，多个第三方驱动 tarball / deb 共用一个 release，
+# 升级版本时上传新文件到同一 release，无需创建新 tag。
 ESCPR2_MIRROR_URL="https://github.com/hanxi/cups-web/releases/download/cups-driver/epson-inkjet-printer-escpr2-1.2.39-1.tar.gz"
-
-# ────────────────────────────────────────────────────────────────────
-# 下载 & 编译
-# ────────────────────────────────────────────────────────────────────
-if [ -z "${ESCPR2_MIRROR_URL}" ]; then
-    echo "[escpr2] FATAL: ESCPR2_MIRROR_URL is empty"
-    exit 1
-fi
+ESCPR2_DEB_AMD64_URL="https://github.com/hanxi/cups-web/releases/download/cups-driver/epson-inkjet-printer-escpr2_1.2.39-1_amd64.deb"
+ESCPR2_DEB_ARMHF_URL="https://github.com/hanxi/cups-web/releases/download/cups-driver/epson-inkjet-printer-escpr2_1.2.39_armhf.deb"
 
 BUILD_DIR="$(mktemp -d /tmp/escpr2-build.XXXXXX)"
 trap 'rm -rf "${BUILD_DIR}"' EXIT
 
 cd "${BUILD_DIR}"
 
+# ────────────────────────────────────────────────────────────────────
+# 架构判断 → amd64/armhf 直接 dpkg 安装预编译 .deb，其他架构源码编译
+# ────────────────────────────────────────────────────────────────────
+# amd64/armhf 是发布镜像最常见的两类目标，直接装 .deb 可以省掉容器里
+# autoreconf/gcc 的 5~10 分钟编译时间。arm64（树莓派 4/5、Apple Silicon
+# 等）暂时没有预编译包，回退到源码编译。
+ARCH="$(dpkg --print-architecture)"
+case "${ARCH}" in
+    amd64)
+        ESCPR2_DEB_URL="${ESCPR2_DEB_AMD64_URL}"
+        ;;
+    armhf)
+        ESCPR2_DEB_URL="${ESCPR2_DEB_ARMHF_URL}"
+        ;;
+    *)
+        ESCPR2_DEB_URL=""
+        ;;
+esac
+
+if [ -n "${ESCPR2_DEB_URL}" ]; then
+    ESCPR2_DEB_FILE="$(basename "${ESCPR2_DEB_URL}")"
+    echo "[escpr2] arch=${ARCH} → installing prebuilt deb ${ESCPR2_DEB_FILE}"
+    echo "[escpr2] downloading from mirror ${ESCPR2_DEB_URL}"
+    curl -fL --retry 3 --retry-delay 3 -o "${ESCPR2_DEB_FILE}" "${ESCPR2_DEB_URL}"
+
+    dpkg -i "${ESCPR2_DEB_FILE}" || apt-get install -y -f --no-install-recommends
+
+    echo "[escpr2] installed version ${ESCPR2_VERSION} (${ARCH} prebuilt deb)"
+    rm -rf /var/lib/apt/lists/*
+    exit 0
+fi
+
+# ────────────────────────────────────────────────────────────────────
+# 源码编译路径（arm64 等无预编译包的架构）
+# ────────────────────────────────────────────────────────────────────
+echo "[escpr2] arch=${ARCH} → no prebuilt deb, building from source"
 echo "[escpr2] downloading from mirror ${ESCPR2_MIRROR_URL}"
 curl -fL --retry 3 --retry-delay 3 -o escpr2.tar.gz "${ESCPR2_MIRROR_URL}"
 
