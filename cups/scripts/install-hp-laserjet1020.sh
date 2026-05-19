@@ -91,11 +91,18 @@ echo "[hp-laserjet1020] installed firmware: ${FW_INSTALL_DIR}/${FW_FILENAME} ($(
 # 派生 A4-default PPD（issue #48）
 # ────────────────────────────────────────────────────────────────────
 # foo2zjs 的 PPD 在 Debian 上由 dh_pyppd 打成单文件可执行 archive
-# （pyppd-ppdfile 模板：`<archive> cat HP-LaserJet_1020.ppd` 抽内容；
-# 见 https://github.com/OpenPrinting/pyppd 的 runner.cat 实现，
-# 输入会被规范化成 "0/<filename>"，所以传 "HP-LaserJet_1020.ppd" 即可）。
+# （pyppd-ppdfile 模板，见 https://github.com/OpenPrinting/pyppd）。
+# 接口：`<archive> list` 列出所有 URI；`<archive> cat <uri>` 抽 PPD 内容。
 # 不同版本 Debian 把 archive 放在不同路径——按 PYPPD_ARCHIVES 顺序探测。
 # 罕见情况下下游可能改铺裸 PPD，再退化到 PPD_SEARCH_DIRS 兜底。
+#
+# 关键点：dh_pyppd 把 /usr/share/ 整目录喂给 pyppd（见 dh_pyppd 源码），
+# 索引 key 形如 "0/ppd/foo2zjs/HP-LaserJet_1020.ppd"——前缀路径包含原 PPD
+# 的相对位置，并非裸文件名。pyppd runner.cat 会剥掉首个路径段（索引号）后
+# 再补 "0/" 用于查表，因此必须传一个**带至少一个 / 分隔符**的 URI；最稳的
+# 做法是先调 `list` 拿到真实 URI 再 `cat`，这样无需关心 Debian 把 PPD 装到
+# /usr/share/ 下的具体子路径（trixie 是 ppd/foo2zjs/，未来若改回 cups/model
+# 也无需改脚本）。
 #
 # 注意：HP-LaserJet_1020.ppd 是 foo2zjs 源码的文件名（PPD/HP-LaserJet_1020.ppd），
 # 不是 NickName。所有路径都拿不到非空内容会立即 fail-fast。
@@ -112,8 +119,16 @@ for cand in "${PYPPD_ARCHIVES[@]}"; do
 done
 
 if [ -n "${PYPPD_ARCHIVE}" ]; then
-    echo "[hp-laserjet1020] extracting HP-LaserJet_1020.ppd from pyppd archive ${PYPPD_ARCHIVE}"
-    "${PYPPD_ARCHIVE}" cat HP-LaserJet_1020.ppd > "${PPD_TMP}"
+    echo "[hp-laserjet1020] discovering HP-LaserJet_1020.ppd URI in ${PYPPD_ARCHIVE}"
+    # `list` 输出每行形如 `"<binary>:<index>/<rel-path>" <lang> "<manuf>" ...`，
+    # 取第一个匹配 HP-LaserJet_1020.ppd 的 URI（双引号之间的内容）。
+    PPD_URI="$("${PYPPD_ARCHIVE}" list | awk -F'"' '/HP-LaserJet_1020\.ppd/ {print $2; exit}')"
+    if [ -z "${PPD_URI}" ]; then
+        echo "[hp-laserjet1020] FATAL: HP-LaserJet_1020.ppd not listed by ${PYPPD_ARCHIVE}"
+        exit 1
+    fi
+    echo "[hp-laserjet1020] extracting via ${PYPPD_ARCHIVE} cat ${PPD_URI}"
+    "${PYPPD_ARCHIVE}" cat "${PPD_URI}" > "${PPD_TMP}"
 else
     PPD_SRC=""
     for dir in "${PPD_SEARCH_DIRS[@]}"; do
