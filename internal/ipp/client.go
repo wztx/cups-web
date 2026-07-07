@@ -73,6 +73,15 @@ func SendPrintJob(printerURI string, r io.Reader, mime string, username string, 
 	}
 	req.Job.Add(goipp.MakeAttribute("copies", goipp.TagInteger, goipp.Integer(copies)))
 
+	// Collate multiple copies – request collated sets (1,2,3,1,2,3) instead of
+	// the uncollated default some drivers use (1,1,1,2,2,2,3,3,3), which forces
+	// the user to re-sort every stack before binding (Issue #85). The CUPS
+	// pdftopdf filter maps "separate-documents-collated-copies" to collated
+	// output. Only meaningful when printing more than one copy.
+	if copies > 1 {
+		req.Job.Add(goipp.MakeAttribute("multiple-document-handling", goipp.TagKeyword, goipp.String("separate-documents-collated-copies")))
+	}
+
 	// Orientation – only override when landscape; portrait is the CUPS default
 	// and explicitly sending orientation-requested=3 may cause pdftopdf to
 	// re-process the document, leading to an inflated page count in CUPS.
